@@ -227,6 +227,7 @@ def run(
         "bit_depth": metadata.bit_depth,
         "projection": metadata.projection,
         "footprint_wkt": metadata.footprint_wkt,
+        "acquisition_time": metadata.acquisition_time,
         "pyramid_ref": str(pyramid_path),
         "invariant_channels_ref": str(inv_path),
         "scale_factors": [float(s) for s in scale_factors],

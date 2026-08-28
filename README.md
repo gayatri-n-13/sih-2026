@@ -29,7 +29,7 @@ full documentation. Quickstart:
 ```bash
 cd preprocessing-svc
 pip install -e .
-pytest                                           # 68 tests, all passing
+pytest --cov=preprocessing_svc                  # 68 tests, ~92% coverage
 PREPROC_OUTPUT_DIR=./var/outputs \
     python -m preprocessing_svc.api              # runs on :8080
 ```

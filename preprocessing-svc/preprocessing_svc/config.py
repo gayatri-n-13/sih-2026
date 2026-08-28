@@ -44,7 +44,19 @@ class JobStatus(str, enum.Enum):
 
 
 class IngestMetadata(BaseModel):
-    """metadata.json as produced by ingestion-svc (Member 1)."""
+    """metadata.json as produced by ingestion-svc (Member 1).
+
+    NOTE on reconciliation status (Member 2 -> Member 1):
+      preprocessing-svc was built before ingestion-svc published its
+      real contract. As of this writing, ingestion-svc's contracts
+      directory is not yet present in the repo (see CONTRACT.md for
+      the deferral flag). The fields below are the assumptions
+      preprocessing-svc made from the system-prompt spec. When the
+      real ingestion contract lands, every field here must be
+      re-verified — particularly the `acquisition_time` field, which
+      preprocessing-svc is forward-compatible with (accepted but
+      not used downstream).
+    """
 
     sensor_type: SensorType
     gsd: float = Field(..., gt=0, description="Ground sample distance in meters/pixel")
@@ -65,6 +77,16 @@ class IngestMetadata(BaseModel):
     footprint_wkt: Optional[str] = None
     band_count: int = Field(..., gt=0)
     bit_depth: int = Field(..., gt=0)
+    # Forward-compat with ingestion-svc's expected schema. Optional,
+    # currently unused by the pipeline. We accept (and ignore) it so
+    # we don't drop metadata when Member 1 lands the real contract.
+    acquisition_time: Optional[str] = Field(
+        None,
+        description=(
+            "ISO-8601 acquisition timestamp. Accepted but not "
+            "currently used by the preprocessing pipeline."
+        ),
+    )
 
     @field_validator("sun_azimuth_deg", "sun_elevation_deg", mode="before")
     @classmethod

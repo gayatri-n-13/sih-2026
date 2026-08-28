@@ -213,6 +213,7 @@ def generate(
         "footprint_wkt": None,
         "band_count": _band_count(sensor),
         "bit_depth": _bit_depth(sensor),
+        "acquisition_time": "2026-08-28T12:00:00Z",  # mock placeholder
     }
     _write_metadata(meta_path, meta)
 
