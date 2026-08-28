@@ -1,0 +1,29 @@
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+.venv/
+venv/
+
+# Test outputs
+var/
+.env
+*.log
+
+# Project-local
+preprocessing-svc/var/
+preprocessing-svc/.pytest_cache/
+preprocessing-svc/.coverage
+preprocessing-svc/htmlcov/
