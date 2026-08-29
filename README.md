@@ -11,7 +11,7 @@ reference basemap) — Smart India Hackathon 2026.
 | **Preprocessing**        | **2**  | `preprocessing-svc/`       | **delivered** |
 | Coarse Matching          | 3      | `coarse-matching-svc/`     | ⚠️ Pending Push |
 | Verification             | 4      | `verification-svc/`        | **delivered** |
-| Refinement / Registration| 5      | `refinement-registration-svc/` | ⚠️ Pending Merge |
+| Refinement / Registration| 5      | `refinement-registration-svc/` | **delivered** |
 | Evaluation               | 6      | `evaluation-svc/`          | **Scaffolded** |
 | Orchestrator             | 6      | `orchestrator-svc/`        | **Scaffolded** |
 
@@ -30,8 +30,7 @@ full documentation. Quickstart:
 cd preprocessing-svc
 pip install -e .
 pytest --cov=preprocessing_svc                  # 68 tests, ~92% coverage
-PREPROC_OUTPUT_DIR=./var/outputs \
-    python -m preprocessing_svc.api              # runs on :8080
+PREPROC_OUTPUT_DIR=./var/outputs     python -m preprocessing_svc.api              # runs on :8080
 ```
 
 The contract that downstream services (Coarse Matching) consume is
