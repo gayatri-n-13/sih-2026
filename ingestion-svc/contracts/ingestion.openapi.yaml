@@ -1,0 +1,276 @@
+openapi: 3.1.0
+info:
+  title: Ingestion Service
+  version: 0.1.0
+paths:
+  /health:
+    get:
+      summary: Health
+      operationId: health_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Health Health Get
+  /ingest:
+    post:
+      summary: Submit Ingest
+      description: 'Submit an ingest job.
+
+
+        If env var ``INGESTION_SYNC=1`` (default in tests), runs synchronously
+
+        and returns the final IngestResult. Otherwise registers a pending
+
+        handle and runs on a background thread.'
+      operationId: submit_ingest_ingest_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResult'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /ingest/{job_id}:
+    get:
+      summary: Get Ingest
+      operationId: get_ingest_ingest__job_id__get
+      parameters:
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Job Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResult'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+components:
+  schemas:
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    IngestRequest:
+      properties:
+        job_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Job Id
+          description: Optional client-supplied ID. If empty, we assign one.
+        raw_image_path:
+          type: string
+          title: Raw Image Path
+          description: Local path to the raw image file
+        sensor_type:
+          $ref: '#/components/schemas/SensorType'
+        projection:
+          type: string
+          title: Projection
+          description: WKT or EPSG/proj string for the image frame
+        sun_azimuth_deg:
+          anyOf:
+          - type: number
+            exclusiveMaximum: 360.0
+            minimum: 0.0
+          - type: 'null'
+          title: Sun Azimuth Deg
+        sun_elevation_deg:
+          anyOf:
+          - type: number
+            maximum: 90.0
+            minimum: -90.0
+          - type: 'null'
+          title: Sun Elevation Deg
+        sun_angle_source_tier:
+          $ref: '#/components/schemas/SunAngleSourceTier'
+        footprint_wkt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Footprint Wkt
+        gsd:
+          anyOf:
+          - type: number
+            exclusiveMinimum: 0.0
+          - type: 'null'
+          title: Gsd
+          description: Override GSD (m/px). If absent, inferred from sensor defaults.
+        acquisition_time:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Acquisition Time
+          description: ISO-8601 acquisition timestamp. Defaults to file mtime if absent.
+        output_prefix:
+          type: string
+          title: Output Prefix
+          description: Object-store prefix for the output (raw_image_ref and metadata_ref
+            will be built under this).
+          default: s3://ingestion-bucket/
+      type: object
+      required:
+      - raw_image_path
+      - sensor_type
+      - projection
+      - sun_angle_source_tier
+      title: IngestRequest
+      description: "Request to ingest a single raw image product.\n\nThe service will:\n\
+        \  1. Open the file at ``raw_image_path`` (local path; in production\n   \
+        \  this would be a presigned URL or staged upload).\n  2. Read sensor metadata\
+        \ (from sidecar, embedded, or filename\n     convention).\n  3. Compute the\
+        \ Sun-angle tier:\n       - ``label``      if a calibrated product label is\
+        \ attached\n       - ``ephemeris``  if a SPICE-computed angle is available\n\
+        \       - ``unavailable`` if neither is present (we will pass the\n      \
+        \   angle through as null; downstream handles estimation)\n  4. Write the\
+        \ image to the object store at ``raw_image_ref`` and\n     write ``metadata.json``\
+        \ to the metadata reference.\n  5. Return the IngestResult envelope."
+    IngestResult:
+      properties:
+        job_id:
+          type: string
+          title: Job Id
+        status:
+          $ref: '#/components/schemas/IngestStatus'
+        raw_image_ref:
+          type: string
+          title: Raw Image Ref
+          default: ''
+        metadata_ref:
+          type: string
+          title: Metadata Ref
+          default: ''
+        sensor_type:
+          anyOf:
+          - $ref: '#/components/schemas/SensorType'
+          - type: 'null'
+        gsd:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Gsd
+        sun_azimuth_deg:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Sun Azimuth Deg
+        sun_elevation_deg:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Sun Elevation Deg
+        sun_angle_source_tier:
+          anyOf:
+          - $ref: '#/components/schemas/SunAngleSourceTier'
+          - type: 'null'
+        band_count:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Band Count
+        bit_depth:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Bit Depth
+        projection:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Projection
+        footprint_wkt:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Footprint Wkt
+        acquisition_time:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Acquisition Time
+        error_message:
+          type: string
+          title: Error Message
+          default: ''
+      type: object
+      required:
+      - job_id
+      - status
+      title: IngestResult
+    IngestStatus:
+      type: string
+      enum:
+      - PENDING
+      - RUNNING
+      - SUCCEEDED
+      - FAILED
+      title: IngestStatus
+    SensorType:
+      type: string
+      enum:
+      - OHRC
+      - TMC
+      - IIRS
+      - REFERENCE
+      title: SensorType
+    SunAngleSourceTier:
+      type: string
+      enum:
+      - label
+      - ephemeris
+      - unavailable
+      title: SunAngleSourceTier
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError

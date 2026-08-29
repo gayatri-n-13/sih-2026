@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ingestion-svc"
+version = "0.1.0"
+description = "Lunar image ingestion microservice (Member 1)"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Member 1" }]
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pydantic>=2.6",
+    "pillow>=10.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "httpx>=0.27",
+    "jsonschema>=4.21",
+    "openapi-spec-validator>=0.7",
+]
+
+[project.scripts]
+ingestion-svc = "app.main:main"
+
+[tool.setuptools]
+packages = ["app", "scripts"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["scripts/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
