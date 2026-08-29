@@ -69,4 +69,4 @@ def make_geotiff(tmp_path):
 
 @pytest.fixture
 def contract_schema_path() -> Path:
-    return Path(__file__).parents[2] / "contracts" / "metadata.schema.json"
+    return Path(__file__).parents[1] / "contracts" / "metadata.schema.json"
