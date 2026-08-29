@@ -15,6 +15,7 @@ class CoarseMatchingMock:
     def generate_initial_candidates(self, num_matches: int = 1000, inlier_ratio: float = 0.3):
         """
         Generates a synthetic set of candidate matches.
+        Returns the reference, job_id, and the ground truth mask.
         """
         job_id = str(uuid.uuid4())
 
@@ -51,7 +52,8 @@ class CoarseMatchingMock:
 
         ref = f"{self.storage_root}{job_id}/candidates.parquet"
         self.generated_files[ref] = df
-        return ref, job_id
+        return ref, job_id, mask
+
 
     def remine_tile(self, job_id: str, tile_id: int, tile_bounds: List[float], relaxed_threshold: float):
         """

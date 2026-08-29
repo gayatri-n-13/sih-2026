@@ -16,18 +16,39 @@ def test_robust_outlier_rejection(engine, mock_client):
     """
     Synthetic outlier-rejection accuracy test:
     Generate candidate set with known inlier/outlier ratio and transform.
+    Verify both precision and recall of the robust estimator.
     """
-    # 100 matches, 30% inliers
+    np.random.seed(42) # Pin seed for determinism
+
+    # 100 matches, 30% genuine inliers
     inlier_ratio = 0.3
-    ref, job_id = mock_client.generate_initial_candidates(num_matches=100, inlier_ratio=inlier_ratio)
+    ref, job_id, ground_truth_mask = mock_client.generate_initial_candidates(num_matches=100, inlier_ratio=inlier_ratio)
     df = mock_client.read_parquet(ref)
 
     initial_transform = Transform(theta=0, scale=1.0, tx=10.0, ty=20.0, confidence=1.0)
-    inliers_mask = engine._robust_fit(df, initial_transform)
+    predicted_mask = engine._robust_fit(df, initial_transform)
 
-    num_inliers = np.sum(inliers_mask)
-    print(f"\n[Outlier Rejection] Injected Ratio: {inlier_ratio}, Recovered Inliers: {num_inliers}/100")
+    # Precision: proportion of predicted inliers that are actually genuine
+    tp = np.sum(predicted_mask & ground_truth_mask)
+    fp = np.sum(predicted_mask & ~ground_truth_mask)
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+
+    # Recall: proportion of genuine inliers correctly identified
+    fn = np.sum(~predicted_mask & ground_truth_mask)
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+
+    print(f"\n[Outlier Rejection] Injected Ratio: {inlier_ratio}")
+    print(f"[Outlier Rejection] True Positives: {tp}, False Positives: {fp}, False Negatives: {fn}")
+    print(f"[Outlier Rejection] Precision: {precision:.3f}, Recall: {recall:.3f}")
+
+    # Assertions: we expect high precision and recall for this simple synthetic case
+    assert precision >= 0.85, f"Precision too low: {precision:.3f}"
+    assert recall >= 0.85, f"Recall too low: {recall:.3f}"
+
+    num_inliers = np.sum(predicted_mask)
     assert 20 <= num_inliers <= 40, f"Expected ~30 inliers, got {num_inliers}"
+
+
 
 def test_coverage_uniformity(engine, mock_client):
     """
@@ -114,7 +135,7 @@ def test_full_verify_pipeline(engine, mock_client):
     End-to-end test of the verify method to cover missing lines in engine.py.
     """
     # Generate candidates
-    ref, job_id = mock_client.generate_initial_candidates(num_matches=200, inlier_ratio=0.4)
+    ref, job_id, _ = mock_client.generate_initial_candidates(num_matches=200, inlier_ratio=0.4)
 
     initial_transform = Transform(theta=0, scale=1.0, tx=10.0, ty=20.0, confidence=1.0)
     config = {
@@ -140,3 +161,4 @@ def test_full_verify_pipeline(engine, mock_client):
     assert not final_df.empty
     assert updated_transform.tx != 0 or updated_transform.ty != 0
     assert report.coverage_fraction >= 0
+

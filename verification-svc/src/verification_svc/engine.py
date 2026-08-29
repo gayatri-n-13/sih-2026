@@ -54,9 +54,10 @@ class VerificationEngine:
 
 
         # 4. Tile-Grid Coverage Audit & Re-mining Loop (Task 5-6)
-        final_df, report = self._run_coverage_loop(job_id, verified_df, pyramid_source_ref, pyramid_reference_ref, config)
+        current_transform = self._update_transform(verified_df)
+        final_df, report = self._run_coverage_loop(job_id, verified_df, pyramid_source_ref, pyramid_reference_ref, config, current_transform)
 
-        # 5. Update Transform
+        # 5. Final transform update from all verified matches
         updated_transform = self._update_transform(final_df)
 
         return final_df, report, updated_transform
@@ -117,19 +118,22 @@ class VerificationEngine:
         return df[mask]
 
 
-    def _run_coverage_loop(self, job_id, df, src_ref, ref_ref, config):
+    def _run_coverage_loop(self, job_id, df, src_ref, ref_ref, config, current_transform: Transform):
         rows = config.get('tile_grid_rows', 8)
         cols = config.get('tile_grid_cols', 8)
         m_min = config.get('m_min', 5)
         m_max = config.get('m_max', 20)
         budget = config.get('remine_budget', 2)
 
-        # Assuming image size from config or metadata
-        img_w = config.get('image_width', 1000)
-        img_h = config.get('image_height', 1000)
+        # Fail fast if dimensions are missing
+        img_w = config.get('image_width')
+        img_h = config.get('image_height')
+        if img_w is None or img_h is None:
+            raise ValueError("Config must provide 'image_width' and 'image_height'")
 
         tile_w = img_w / cols
         tile_h = img_h / rows
+
 
         current_df = df
         remine_calls = 0
@@ -190,8 +194,8 @@ class VerificationEngine:
 
             if new_candidates:
                 merged = pd.concat([current_df] + new_candidates).drop_duplicates()
-                # Re-verify new candidates
-                mask = self._robust_fit(merged, Transform(0, 1, 10, 20, 1.0)) # Dummy GT
+                # Re-verify new candidates against the current best transform
+                mask = self._robust_fit(merged, current_transform)
                 current_df = merged[mask]
             else:
                 break
