@@ -93,7 +93,7 @@ def test_coverage_uniformity(engine, mock_client):
 
     # Run verification
     initial_transform = Transform(theta=0, scale=1.0, tx=10.0, ty=20.0, confidence=1.0)
-    final_df, report = engine._run_coverage_loop(job_id, df, "src", "ref", config)
+    final_df, report = engine._run_coverage_loop(job_id, df, "src", "ref", config, initial_transform)
 
     final_cov = report.coverage_fraction
     final_cov_var = np.var(report.per_tile_counts)
@@ -104,6 +104,7 @@ def test_coverage_uniformity(engine, mock_client):
 
     assert final_cov > initial_cov, f"Coverage should improve. Initial: {initial_cov}, Final: {final_cov}"
     assert final_cov_var < initial_cov_var, f"Variance should decrease. Initial: {initial_cov_var}, Final: {final_cov_var}"
+
 
 def test_remining_budget(engine, mock_client):
     """
@@ -125,10 +126,12 @@ def test_remining_budget(engine, mock_client):
         'relaxed_threshold': 0.4
     }
 
-    final_df, report = engine._run_coverage_loop("budget_job", df, "src", "ref", config)
+    initial_transform = Transform(theta=0, scale=1.0, tx=10.0, ty=20.0, confidence=1.0)
+    final_df, report = engine._run_coverage_loop("budget_job", df, "src", "ref", config, initial_transform)
 
     print(f"\n[Budget Test] Configured Budget: {budget}, Actual Iterations: {report.remine_iterations_used}")
     assert report.remine_iterations_used <= budget, f"Loop exceeded budget. Budget: {budget}, Actual: {report.remine_iterations_used}"
+
 
 def test_full_verify_pipeline(engine, mock_client):
     """
