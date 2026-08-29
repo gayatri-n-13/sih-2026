@@ -27,3 +27,6 @@ preprocessing-svc/var/
 preprocessing-svc/.pytest_cache/
 preprocessing-svc/.coverage
 preprocessing-svc/htmlcov/
+.claude/
+backup_ingestion/
+local_s3/
