@@ -1,0 +1,2 @@
+# Dev-only: OpenAPI client codegen
+openapi-python-client==0.21.1

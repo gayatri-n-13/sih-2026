@@ -1,0 +1,230 @@
+openapi: 3.0.3
+info:
+  title: Ingestion Service API
+  version: 0.1.0
+  description: |
+    First-stage ingest microservice for the lunar image-registration pipeline.
+    Decodes Chandrayaan-2 OHRC/TMC/IIRS products or reference basemaps into a
+    validated RawProduct written to object storage as a Cloud-Optimized GeoTIFF,
+    plus a `metadata.json` sidecar with derived metadata.
+
+    All large arrays are passed by REFERENCE (object-storage URI) — only small
+    metadata traverses the wire. Downstream services (Preprocessing, etc.) must
+    consume this contract.
+  contact:
+    name: ingestion-svc owner
+servers:
+  - url: http://localhost:8000
+    description: local docker-compose
+
+paths:
+  /health:
+    get:
+      summary: Liveness/readiness probe
+      operationId: health
+      responses:
+        '200':
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok, degraded] }
+                  version: { type: string }
+
+  /v1/ingest:
+    post:
+      summary: Submit an ingestion job (async)
+      operationId: ingestProduct
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestRequest'
+      responses:
+        '202':
+          description: Job accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobHandle'
+        '400':
+          description: Malformed request (bad sensor_type, unreachable URI, etc.)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/ingest/{job_id}:
+    get:
+      summary: Poll for ingestion result
+      operationId: getIngestStatus
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Current job state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestResult'
+        '404':
+          description: Unknown job_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    IngestRequest:
+      type: object
+      required: [job_id, source_file_uri, sensor_type]
+      properties:
+        job_id:
+          type: string
+          description: Caller-supplied correlation id (UUID recommended). Must be unique per job.
+        source_file_uri:
+          type: string
+          description: |
+            Object-storage URI to the raw input file (s3://... or local file://...).
+            For first pass, file:// or s3:// are both accepted; the storage backend is
+            pluggable via config.
+          example: s3://raw-bucket/ch2/ohrc/abc.LBL
+        sensor_type:
+          type: string
+          enum: [OHRC, TMC, IIRS, REFERENCE]
+          description: |
+            OHRC / TMC / IIRS = Chandrayaan-2 sensor products.
+            REFERENCE = external lunar basemap to register against.
+        config_ref:
+          type: string
+          description: |
+            s3:// URI to the per-job config (field-mapping table, validation rules,
+            ephemeris kernel list, output bucket). If omitted, the service falls
+            back to the default config loaded from $INGESTION_DEFAULT_CONFIG.
+          example: s3://configs/ch2/ohrc-default.yaml
+
+    JobHandle:
+      type: object
+      required: [job_id, status]
+      properties:
+        job_id: { type: string }
+        status:
+          type: string
+          enum: [PENDING, RUNNING, COMPLETED, FAILED]
+
+    IngestResult:
+      type: object
+      required: [job_id, status]
+      properties:
+        job_id: { type: string }
+        status:
+          type: string
+          enum: [PENDING, RUNNING, COMPLETED, FAILED]
+        raw_image_ref:
+          type: string
+          description: s3://.../{job_id}/ingestion/raw.cog — Cloud-Optimized GeoTIFF
+        metadata_ref:
+          type: string
+          description: s3://.../{job_id}/ingestion/metadata.json
+        error_message:
+          type: string
+          description: |
+            Populated when status=FAILED. MUST be specific and actionable — e.g.
+            "missing required field 'EXPOSURE_DURATION' in label",
+            "corrupt band count: expected 1, got 4",
+            "unsupported sensor_type 'FOO'".
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, example: BAD_REQUEST }
+        message: { type: string }
+
+    # ---- metadata.json schema (sidecar written next to raw.cog) ----
+    MetadataSidecar:
+      type: object
+      additionalProperties: true
+      description: |
+        Shape reconciled against preprocessing-svc/preprocessing_svc/config.py::IngestMetadata
+        (Member 2's authoritative Pydantic model). Bounds on sun angles and
+        positivity of gsd match that model's validators.
+      required:
+        - sensor_type
+        - gsd
+        - acquisition_time
+        - sun_azimuth_deg
+        - sun_elevation_deg
+        - sun_angle_source_tier
+        - projection
+        - footprint_wkt
+        - band_count
+        - bit_depth
+      properties:
+        sensor_type:
+          type: string
+          enum: [OHRC, TMC, IIRS, REFERENCE]
+        gsd:
+          type: number
+          format: float
+          exclusiveMinimum: 0
+          description: |
+            Ground sample distance in m/px. MUST be a positive number —
+            Preprocessing uses it for pyramid scaling and rejects null.
+            When the source label carries no GSD, ingestion-svc falls back
+            to a per-sensor known default (e.g. 5.0 m/px for REFERENCE) and
+            logs a warning.
+        acquisition_time:
+          type: string
+          nullable: true
+          format: date-time
+          description: ISO8601 UTC string, or null if unknown. Informational; Preprocessing does not currently read this.
+          example: "2021-08-15T04:32:11Z"
+        sun_azimuth_deg:
+          type: number
+          format: float
+          nullable: true
+          minimum: 0
+          maximum: 360
+          description: |
+            Sun azimuth at the sub-spacecraft point on the lunar surface,
+            degrees, 0=N, 90=E (image frame). Bounds match Preprocessing's
+            IngestMetadata validator.
+        sun_elevation_deg:
+          type: number
+          format: float
+          nullable: true
+          minimum: -90
+          maximum: 90
+          description: Sun elevation above horizon in degrees. Bounds match Preprocessing's IngestMetadata validator.
+        sun_angle_source_tier:
+          type: string
+          enum: [label, ephemeris, unavailable]
+          description: |
+            label       = read directly from product label
+            ephemeris   = computed via spiceypy from acquisition time + lat/lon
+            unavailable = neither; downstream (preprocessing) must estimate from image
+        projection:
+          type: string
+          description: |
+            WKT or EPSG/proj string. Preprocessing requires this to be
+            non-empty; ingestion writes "unknown" only as a last-resort
+            fallback.
+        footprint_wkt:
+          type: string
+          nullable: true
+          description: WKT POLYGON of the image footprint, or null if not derivable
+        band_count:
+          type: integer
+          minimum: 1
+        bit_depth:
+          type: integer
+          minimum: 1

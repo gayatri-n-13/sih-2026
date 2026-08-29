@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sih2026.local/contracts/metadata.schema.json",
+  "title": "Ingestion metadata sidecar",
+  "description": "Schema for the metadata.json sidecar written next to raw.cog in object storage. Consumed by downstream services (Preprocessing and beyond).\n\nReconciled against preprocessing-svc/preprocessing_svc/config.py::IngestMetadata — all field names, types, and enum values match. Bounds on sun angles and the positivity constraint on gsd align with what Preprocessing's Pydantic model enforces. Unknown extra fields are allowed (additionalProperties: true) so downstream services can add fields without breaking ingestion; ingestion itself only writes the documented set.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "sensor_type",
+    "gsd",
+    "acquisition_time",
+    "sun_azimuth_deg",
+    "sun_elevation_deg",
+    "sun_angle_source_tier",
+    "projection",
+    "footprint_wkt",
+    "band_count",
+    "bit_depth"
+  ],
+  "properties": {
+    "sensor_type":           { "type": "string", "enum": ["OHRC", "TMC", "IIRS", "REFERENCE"] },
+    "gsd":                   { "type": "number", "exclusiveMinimum": 0, "description": "Ground sample distance in m/px. MUST be a positive number — Preprocessing uses it to derive pyramid scaling and rejects null. When unknown, ingestion-svc should fall back to a per-sensor known-default (e.g. 5.0 m/px for REFERENCE) and emit a warning." },
+    "acquisition_time":      { "type": ["string", "null"], "format": "date-time", "description": "ISO8601 UTC string, or null if unknown. Informational; Preprocessing does not currently read this." },
+    "sun_azimuth_deg":       { "type": ["number", "null"], "minimum": 0, "maximum": 360, "description": "Sun azimuth in degrees, 0=N, 90=E (image frame). Bounds match Preprocessing's IngestMetadata validator." },
+    "sun_elevation_deg":     { "type": ["number", "null"], "minimum": -90, "maximum": 90, "description": "Sun elevation above horizon in degrees. Bounds match Preprocessing's IngestMetadata validator." },
+    "sun_angle_source_tier": { "type": "string", "enum": ["label", "ephemeris", "unavailable"], "description": "label = read from product label; ephemeris = computed via spiceypy; unavailable = neither — downstream (Preprocessing) estimates from image." },
+    "projection":            { "type": "string", "description": "WKT or EPSG/proj string. Preprocessing requires this to be non-empty; ingestion writes 'unknown' only as a last-resort fallback." },
+    "footprint_wkt":         { "type": ["string", "null"] },
+    "band_count":            { "type": "integer", "minimum": 1 },
+    "bit_depth":             { "type": "integer", "minimum": 1 }
+  }
+}
