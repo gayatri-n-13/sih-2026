@@ -72,7 +72,7 @@ class IngestMetadata(BaseModel):
         le=90,
         description="Sun elevation above horizon in degrees",
     )
-    sun_angle_source_tier: SunAngleSourceTier = SunAngleSourceTier.UNAVAILABLE
+    sun_angle_source_tier: SunAngleSourceTier
     projection: str = Field(..., description="WKT or EPSG/proj string")
     footprint_wkt: Optional[str] = None
     band_count: int = Field(..., gt=0)

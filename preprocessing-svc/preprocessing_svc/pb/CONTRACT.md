@@ -5,20 +5,28 @@ This document is the binding interface between **preprocessing-svc
 documents what preprocessing-svc **consumes** from **ingestion-svc
 (Member 1)** so each side can verify against the same source of truth.
 
-> **Reconciliation status — verified against ingestion-svc contracts on
-> 2026-08-28:**
+> **Reconciliation status — verified against ingestion-svc contracts on 2026-08-29:**
 >
-> The fields documented under "Upstream (consumed from ingestion-svc)"
-> are the **assumed** schema preprocessing-svc was built against from
-> the system-prompt spec. As of this writing, the repository at
-> `github.com/gayatri-n-13/sih-2026` has **no** `ingestion-svc/`
-> directory on any branch or tag — the real ingestion contract is not
-> yet published. preprocessing-svc has been made **forward-compatible**
-> with the field most likely to be added (`acquisition_time`) and is
-> otherwise self-consistent: every field it reads from `metadata.json`
-> is documented here and present in its own `IngestMetadata` Pydantic
-> model. When Member 1's contract lands, this note must be updated and
-> every field re-verified.
+> The fields under "Upstream (consumed from ingestion-svc)" have been
+> verified against `ingestion-svc/contracts/metadata.schema.json`.
+> All fields match in type and constraints. The `sun_angle_source_tier`
+> field is now explicitly marked as required to match the upstream
+> schema.
+>
+> **Field-by-Field Diff:**
+>
+> | Field | Assumed | Actual | Status |
+> | :--- | :--- | :--- | :--- |
+> | `sensor_type` | enum | enum | MATCH |
+> | `gsd` | float (>0) | number (>0) | MATCH |
+> | `sun_azimuth_deg` | float\|null | number\|null | MATCH |
+> | `sun_elevation_deg` | float\|null | number\|null | MATCH |
+> | `sun_angle_source_tier` | enum (opt) | enum (req) | UPDATED |
+> | `projection` | string | string | MATCH |
+> | `footprint_wkt` | string\|null | string\|null | MATCH |
+> | `band_count` | int ($\ge 1$) | integer (>0) | MATCH |
+> | `bit_depth` | int ($\ge 1$) | integer (>0) | MATCH |
+> | `acquisition_time` | ISO-8601 (opt) | string\|null (opt) | MATCH |
 
 ## Upstream (consumed from ingestion-svc)
 
