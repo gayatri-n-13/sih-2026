@@ -1,28 +1,118 @@
+version: '3.8'
+
 services:
   minio:
-    image: minio/minio:RELEASE.2024-08-29T01-40-52Z
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+    image: minio/minio
     ports:
       - "9000:9000"
       - "9001:9001"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 5s
-      retries: 10
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: password
+    command: server /data --console-address ":9001"
+    networks:
+      - lunar-net
+
+  postgres:
+    image: postgres:15
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: lunar_reg
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+    networks:
+      - lunar-net
 
   ingestion-svc:
     build: ./ingestion-svc
-    depends_on:
-      minio:
-        condition: service_healthy
     environment:
-      INGESTION_S3_ENDPOINT_URL: http://minio:9000
-      INGESTION_S3_ACCESS_KEY: minioadmin
-      INGESTION_S3_SECRET_KEY: minioadmin
-      INGESTION_OUTPUT_BUCKET: ingestion-output
-      INGESTION_LOG_LEVEL: info
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=password
     ports:
       - "8000:8000"
+    networks:
+      - lunar-net
+    depends_on:
+      - minio
+
+  preprocessing-svc:
+    build: ./preprocessing-svc
+    environment:
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=password
+    ports:
+      - "8080:8080"
+    networks:
+      - lunar-net
+    depends_on:
+      - minio
+
+  coarse-matching-svc:
+    # This is currently missing from the repo, so we'll leave it as a placeholder
+    # or use a mock image if available.
+    image: alpine:latest
+    command: sleep infinity
+    networks:
+      - lunar-net
+
+  verification-svc:
+    build: ./verification-svc
+    environment:
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=password
+    ports:
+      - "50051:50051"
+    networks:
+      - lunar-net
+    depends_on:
+      - minio
+
+  refinement-registration-svc:
+    # This is currently on a branch, so we'll build from the folder if it's merged.
+    build: ./refinement-registration-svc
+    environment:
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=password
+    ports:
+      - "50052:50052"
+    networks:
+      - lunar-net
+    depends_on:
+      - minio
+
+  orchestrator-svc:
+    build: ./orchestrator-svc
+    environment:
+      - DATABASE_URL=postgresql://admin:password@postgres:5432/lunar_reg
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=password
+    ports:
+      - "8000:8000"
+    networks:
+      - lunar-net
+    depends_on:
+      - postgres
+      - minio
+
+  evaluation-svc:
+    build: ./evaluation-svc
+    environment:
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=password
+    ports:
+      - "8081:8081"
+    networks:
+      - lunar-net
+    depends_on:
+      - minio
+
+networks:
+  lunar-net:
+    driver: bridge

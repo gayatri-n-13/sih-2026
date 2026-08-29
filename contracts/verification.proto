@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package verification;
+
+message CoarseTransform {
+    float theta = 1;
+    float scale = 2;
+    float tx = 3;
+    float ty = 4;
+    float confidence = 5;
+}
+
+message VerifyRequest {
+    string job_id = 1;
+    string candidate_matches_ref = 2;
+    CoarseTransform initial_transform = 3;
+    string pyramid_source_ref = 4;
+    string pyramid_reference_ref = 5;
+    string config_ref = 6;
+}
+
+message CoverageReport {
+    int32 tile_grid_rows = 1;
+    int32 tile_grid_cols = 2;
+    repeated int32 per_tile_counts = 3;
+    repeated int32 under_covered_tiles = 4;
+    float coverage_fraction = 5;
+    int32 remine_calls_total = 6;
+    int32 remine_iterations_used = 7;
+}
+
+message VerifyResult {
+    string job_id = 1;
+    enum Status {
+        PENDING = 0;
+        PROCESSING = 1;
+        COMPLETED = 2;
+        FAILED = 3;
+    }
+    Status status = 2;
+    string verified_matches_ref = 3;
+    CoverageReport coverage_report = 4;
+    CoarseTransform updated_transform = 5;
+    string error_message = 6;
+}
+
+message JobHandle {
+    string job_id = 1;
+}
+
+service VerificationService {
+    rpc Verify (VerifyRequest) returns (JobHandle);
+    rpc GetVerifyStatus (JobHandle) returns (VerifyResult);
+}
+
+// Contract for the upstream Coarse Matching service that this service consumes
+message RemineRequest {
+    string job_id = 1;
+    int32 tile_id = 2;
+    repeated float tile_bounds = 3; // [xmin, ymin, xmax, ymax]
+    float relaxed_confidence_threshold = 4;
+}
+
+message RemineResult {
+    string additional_candidates_ref = 1;
+}
+
+service CoarseMatchingService {
+    rpc RemineTile (RemineRequest) returns (RemineResult);
+}

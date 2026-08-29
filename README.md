@@ -7,13 +7,13 @@ reference basemap) — Smart India Hackathon 2026.
 
 | Service                  | Member | Path                       | Status        |
 | ------------------------ | ------ | -------------------------- | ------------- |
-| Ingestion                | 1      | `ingestion-svc/`           | (TBD)         |
+| Ingestion                | 1      | `ingestion-svc/`           | **delivered** |
 | **Preprocessing**        | **2**  | `preprocessing-svc/`       | **delivered** |
-| Coarse Matching          | 3      | `coarse-matching-svc/`     | (TBD)         |
-| Verification             | 4      | `verification-svc/`        | (TBD)         |
-| Refinement / Registration| 5      | `refinement-svc/`          | (TBD)         |
-| Evaluation               | 6      | `evaluation-svc/`          | (TBD)         |
-| Orchestrator             | 0      | `orchestrator/`            | (TBD)         |
+| Coarse Matching          | 3      | `coarse-matching-svc/`     | ⚠️ Pending Push |
+| Verification             | 4      | `verification-svc/`        | **delivered** |
+| Refinement / Registration| 5      | `refinement-registration-svc/` | ⚠️ Pending Merge |
+| Evaluation               | 6      | `evaluation-svc/`          | **Scaffolded** |
+| Orchestrator             | 6      | `orchestrator-svc/`        | **Scaffolded** |
 
 ## Preprocessing service (Member 2)
 
