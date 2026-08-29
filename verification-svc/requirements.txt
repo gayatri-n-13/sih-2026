@@ -1,0 +1,11 @@
+numpy
+scipy
+opencv-contrib-python
+pandas
+pyarrow
+fastapi
+uvicorn
+grpcio
+grpcio-tools
+pytest
+pydantic
