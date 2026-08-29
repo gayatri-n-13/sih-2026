@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package alignment;
+
+service CoarseMatchingService {
+    rpc Match (MatchRequest) returns (JobHandle);
+    rpc GetMatchStatus (JobHandle) returns (MatchResult);
+    rpc RemineTile (RemineRequest) returns (RemineResult);
+}
+
+message MatchRequest {
+    string job_id = 1;
+    string pyramid_source_ref = 2;
+    string pyramid_reference_ref = 3;
+    string invariant_channels_source_ref = 4;
+    string invariant_channels_reference_ref = 5;
+    string config_ref = 6;
+}
+
+message JobHandle {
+    string job_id = 1;
+}
+
+message CoarseTransform {
+    float theta = 1;
+    float scale = 2;
+    float tx = 3;
+    float ty = 4;
+    float confidence = 5;
+}
+
+message MatchResult {
+    string job_id = 1;
+    enum Status {
+        PENDING = 0;
+        PROCESSING = 1;
+        COMPLETED = 2;
+        FAILED = 3;
+    }
+    Status status = 2;
+    string candidate_matches_ref = 3; // s3://.../candidates.parquet
+    CoarseTransform coarse_transform = 4;
+    string error_message = 5;
+}
+
+message RemineRequest {
+    string job_id = 1;
+    int32 tile_id = 2;
+    repeated float tile_bounds = 3; // [xmin, ymin, xmax, ymax]
+    float relaxed_confidence_threshold = 4;
+}
+
+message RemineResult {
+    string tile_id = 1;
+    string additional_candidates_ref = 2; // s3://.../remine_{tile_id}.parquet
+}
