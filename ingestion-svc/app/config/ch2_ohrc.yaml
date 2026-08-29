@@ -1,0 +1,22 @@
+# Per-sensor override example.
+# When a real OHRC label is inspected, fill in the dotted-paths and ship
+# this as a per-job config. Until then this file is a placeholder showing
+# the shape.
+
+field_mapping:
+  gsd:                   "MAP_RESOLUTION"
+  acquisition_time:      "START_TIME"
+  sun_azimuth_deg:       "SUN_AZIMUTH"
+  sun_elevation_deg:     "SUN_ELEVATION"
+  projection:            "MAP_PROJECTION_TYPE"
+  footprint_wkt:         null
+  bit_depth:             "SAMPLE_BITS"
+  band_count:            null
+
+validation:
+  min_band_count: 1
+  max_band_count: 1   # OHRC is panchromatic
+  reject_all_nan: true
+  max_dim: 100000
+
+spice_kernels: []

@@ -1,79 +1,72 @@
-"""Shared test fixtures."""
+"""Shared pytest fixtures."""
 from __future__ import annotations
 
-import os
-import sys
+import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-
-from PIL import Image  # noqa: E402
-import numpy as np  # noqa: E402
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 @pytest.fixture
-def workspace(tmp_path, monkeypatch):
-    """Configure a clean ingestion workspace under tmp_path.
-
-    - Sets INGESTION_SYNC=1 so HTTP handlers run synchronously
-    - Sets INGESTION_FAKES3_ROOT so byte-writing paths are exercised
-    - Returns the tmp_path for the test's own use
-    """
-    fakes3 = tmp_path / "fakes3"
-    fakes3.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("INGESTION_SYNC", "1")
-    monkeypatch.setenv("INGESTION_FAKES3_ROOT", str(fakes3))
-    return tmp_path
+def fixtures_dir() -> Path:
+    return FIXTURES
 
 
 @pytest.fixture
-def ohrc_image(tmp_path) -> Path:
-    """A small synthetic OHRC-like TIFF (1 band, uint16)."""
-    arr = (np.random.default_rng(0).uniform(1000, 4000, (64, 64))).astype(np.uint16)
-    p = tmp_path / "ohrc.tif"
-    Image.fromarray(arr).save(p)
-    return p
+def make_geotiff(tmp_path):
+    """Write a small synthetic GeoTIFF and return its path."""
+    import rasterio
+    from rasterio.transform import from_origin
+
+    def _make(
+        *,
+        name: str = "sample.tif",
+        bands: int = 1,
+        height: int = 64,
+        width: int = 64,
+        dtype: str = "uint16",
+        data: np.ndarray | None = None,
+        crs: str = "EPSG:4326",
+        tags: dict[str, str] | None = None,
+        fill: float | int = 1,
+        nan_corrupt: bool = False,
+    ) -> Path:
+        path = tmp_path / name
+        if nan_corrupt:
+            # NaN can only be stored in float arrays. Force a float dtype so
+            # the fixture round-trips even when the caller asked for uint.
+            dtype = "float32"
+        if data is None:
+            arr = np.full((bands, height, width), fill, dtype=dtype)
+            if nan_corrupt:
+                arr[:] = np.nan
+            data = arr
+        elif nan_corrupt:
+            data = data.copy().astype("float32")
+            data[:] = np.nan
+
+        transform = from_origin(0.0, height, 1.0, 1.0)
+        profile = {
+            "driver": "GTiff",
+            "height": height,
+            "width": width,
+            "count": bands,
+            "dtype": str(data.dtype),
+            "crs": crs,
+            "transform": transform,
+        }
+        with rasterio.open(path, "w", **profile) as dst:
+            dst.write(data)
+            if tags:
+                dst.update_tags(**tags)
+        return path
+
+    return _make
 
 
 @pytest.fixture
-def tmc_image(tmp_path) -> Path:
-    """A small synthetic TMC-like TIFF (3 bands).
-
-    For multi-band uint16, PIL's RGB mode expects uint8; we scale and
-    store as uint8 RGB so PIL can roundtrip the file. The ingest path
-    only checks band_count and bit_depth via mode-name heuristics, so
-    this is sufficient for exercising the contract.
-    """
-    rng = np.random.default_rng(1)
-    arr = (rng.uniform(500, 3000, (64, 64, 3))).astype(np.uint16)
-    arr8 = (arr / 256).clip(0, 255).astype(np.uint8)
-    p = tmp_path / "tmc.tif"
-    Image.fromarray(arr8, mode="RGB").save(p)
-    return p
-
-
-@pytest.fixture
-def iirs_image(tmp_path) -> Path:
-    """A small synthetic IIRS-like TIFF (3 bands, uint8 RGB)."""
-    rng = np.random.default_rng(2)
-    arr = (rng.uniform(0, 255, (32, 32, 3))).astype(np.uint8)
-    p = tmp_path / "iirs.tif"
-    Image.fromarray(arr, mode="RGB").save(p)
-    return p
-
-
-@pytest.fixture
-def reference_image(tmp_path) -> Path:
-    """A small synthetic REFERENCE basemap (8-bit grayscale)."""
-    arr = np.random.default_rng(3).integers(0, 255, (64, 64), dtype=np.uint8)
-    p = tmp_path / "ref.tif"
-    Image.fromarray(arr).save(p)
-    return p
-
-
-@pytest.fixture
-def output_prefix() -> str:
-    return "s3://ingestion-bucket/"
+def contract_schema_path() -> Path:
+    return Path(__file__).parents[2] / "contracts" / "metadata.schema.json"

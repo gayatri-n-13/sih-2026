@@ -1,30 +1,26 @@
-FROM python:3.11-slim
+# syntax=docker/dockerfile:1.6
+FROM python:3.11-slim AS base
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+# GDAL/rasterio needs libgdal + its headers at runtime.
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgdal32 libgeos-dev libproj-dev curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# ingestion-svc has no native binary deps beyond Pillow's wheels
-# (which are bundled). No apt packages needed for the service itself.
-# Keep the image minimal.
+WORKDIR /srv/ingestion
 
 COPY requirements.txt ./
-RUN pip install --upgrade pip && pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app/ ./app/
-COPY contracts/ ./contracts/
-COPY scripts/ ./scripts/
+COPY app ./app
 COPY pyproject.toml ./
-COPY README.md ./
 
-RUN pip install -e .
+EXPOSE 8000
 
-EXPOSE 8080
+HEALTHCHECK --interval=10s --timeout=3s --retries=5 \
+    CMD curl -fsS http://localhost:8000/health || exit 1
 
-ENV INGESTION_HOST=0.0.0.0 \
-    INGESTION_PORT=8080 \
-    INGESTION_FAKES3_ROOT=/var/ingestion-fakes3
-
-CMD ["python", "-m", "app.main"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

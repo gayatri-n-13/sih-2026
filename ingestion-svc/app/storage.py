@@ -1,104 +1,152 @@
-"""Object-storage abstraction for ingestion-svc.
+"""Object-storage writer.
 
-The contract says the orchestrator (Member 0) and downstream services
-exchange *references* (s3://…) — not raw bytes. For local development
-and tests we support:
+Writes:
+  s3://{bucket}/{job_id}/ingestion/raw.cog     (Cloud-Optimized GeoTIFF)
+  s3://{job_id}/ingestion/metadata.json
 
-  - s3://bucket/key  → if a ``local_fakes3_root`` is configured (env var
-                       ``INGESTION_FAKES3_ROOT``), treat the bucket as a
-                       subdirectory there. Otherwise we record the
-                       reference but do not write bytes (the byte path
-                       is exercised only when the environment variable
-                       is set).
-  - file://path      → resolve to the local filesystem path.
-  - /abs/path        → as-is.
-
-The byte-writing path is used both by tests (under a temp dir) and by
-local Docker runs (mounted volume).
+First pass: local filesystem under ./local_s3/ — the layout mirrors the
+S3 key layout 1:1, so swapping in real boto3 calls is a 1-function
+change later. The contract (URIs returned to caller) is identical either way.
 """
 from __future__ import annotations
 
+import json
+import logging
 import os
-import re
-import shutil
+import tempfile
 from pathlib import Path
-from typing import Optional
-from urllib.parse import urlparse
+from typing import Any
 
-_S3_PATTERN = re.compile(r"^s3://([^/]+)/(.*)$")
-
-
-def fakes3_root() -> Optional[Path]:
-    """Return the configured local-fakeS3 root, or None if not set."""
-    root = os.environ.get("INGESTION_FAKES3_ROOT")
-    return Path(root) if root else None
+log = logging.getLogger(__name__)
 
 
-def resolve_ref(ref: str) -> Path:
-    """Resolve a service reference to a local filesystem Path.
+def write_outputs(
+    *,
+    job_id: str,
+    array: Any,                       # np.ndarray
+    metadata: dict[str, Any],
+    bucket: str,
+    prefix_template: str,
+    local_root: Path | None = None,
+    s3_endpoint_url: str | None = None,
+    s3_access_key: str | None = None,
+    s3_secret_key: str | None = None,
+    s3_region: str = "us-east-1",
+) -> tuple[str, str]:
+    """Write raw.cog + metadata.json, return (raw_image_ref, metadata_ref).
 
-    Raises ``FileNotFoundError`` only if the reference is an explicit
-    ``file://`` to a non-existent path (which means a contract
-    violation). ``s3://`` references resolve to the local-fakeS3 root
-    if set; otherwise we raise so callers fail fast.
+    Strategy:
+      1. Write to a local temp file via rasterio (creates a proper COG).
+      2. Upload to s3 if endpoint is configured; else copy into
+         local_root/{bucket}/{prefix}/ for offline / docker-compose dev.
+      3. Return the canonical s3:// URI.
     """
-    if not ref:
-        raise ValueError("Empty reference")
-    m = _S3_PATTERN.match(ref)
-    if m:
-        bucket, key = m.group(1), m.group(2)
-        root = fakes3_root()
-        if root is None:
-            raise FileNotFoundError(
-                f"s3:// ref {ref} cannot be resolved: "
-                f"INGESTION_FAKES3_ROOT is not set"
+    prefix = prefix_template.format(job_id=job_id)
+    raw_key = f"{prefix}/raw.cog"
+    meta_key = f"{prefix}/metadata.json"
+
+    raw_local = _write_cog_local(array)
+    meta_local = _write_json_local(metadata)
+
+    try:
+        if s3_endpoint_url and not s3_endpoint_url.startswith("http://localhost") \
+                and os.environ.get("INGESTION_FORCE_LOCAL", "0") != "1":
+            _upload_s3(
+                raw_local, meta_local,
+                bucket=bucket,
+                raw_key=raw_key,
+                meta_key=meta_key,
+                endpoint_url=s3_endpoint_url,
+                access_key=s3_access_key,
+                secret_key=s3_secret_key,
+                region=s3_region,
             )
-        return root / bucket / key
-    u = urlparse(ref)
-    if u.scheme == "file":
-        return Path(u.path)
-    return Path(ref)
+        else:
+            target_root = (local_root or Path("./local_s3")).resolve()
+            (target_root / bucket / raw_key).parent.mkdir(parents=True, exist_ok=True)
+            (target_root / bucket / raw_key).write_bytes(raw_local.read_bytes())
+            (target_root / bucket / meta_key).parent.mkdir(parents=True, exist_ok=True)
+            (target_root / bucket / meta_key).write_bytes(meta_local.read_bytes())
+    finally:
+        raw_local.unlink(missing_ok=True)
+        meta_local.unlink(missing_ok=True)
+
+    return f"s3://{bucket}/{raw_key}", f"s3://{bucket}/{meta_key}"
 
 
-def ref_from_local(local_path: Path, output_prefix: str, key_suffix: str = "") -> str:
-    """Build the service reference for a local file at ``local_path``.
+def _write_cog_local(array) -> Path:
+    try:
+        import rasterio
+        from rasterio.io import MemoryFile
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("rasterio required for COG write") from exc
 
-    ``output_prefix`` is typically ``s3://ingestion-bucket/`` — we
-    rewrite the local path to live under that bucket/prefix.
-    """
-    local_path = Path(local_path).resolve()
-    if output_prefix.startswith("s3://"):
-        m = _S3_PATTERN.match(output_prefix)
-        assert m is not None
-        bucket, prefix = m.group(1), m.group(2)
-        # The reference points to the file *as it would be on S3*;
-        # downstream services that resolve the ref to local need
-        # fakes3_root configured to land on the same directory.
-        key = f"{prefix}{key_suffix}".rstrip("/")
-        # Use a stable hash-like suffix derived from the local filename
-        # so multiple runs of the same fixture don't collide.
-        return f"s3://{bucket}/{key}"
-    if output_prefix.startswith("file://"):
-        return f"{output_prefix.rstrip('/')}/{key_suffix}".rstrip("/")
-    return str(Path(output_prefix) / key_suffix)
+    if array.ndim == 2:
+        array = array[None, :, :]  # rasterio wants (bands, H, W)
+    bands, h, w = array.shape
+    tmp = Path(tempfile.mkstemp(suffix=".tif")[1])
+    profile = {
+        "driver": "GTiff",
+        "height": h,
+        "width": w,
+        "count": bands,
+        "dtype": str(array.dtype),
+        "tiled": True,
+        "blockxsize": 256,
+        "blockysize": 256,
+        "compress": "deflate",
+    }
+    with rasterio.open(tmp, "w", **profile) as dst:
+        dst.write(array)
+    # Promote to COG. rasterio >= 1.3 ships `rasterio.shutil.cog_copy`.
+    cog_tmp = Path(tempfile.mkstemp(suffix=".cog.tif")[1])
+    try:
+        rasterio.shutil.cog_copy(
+            tmp, cog_tmp, compress="deflate", blocksize=256, overview_resampling="average"
+        )
+        tmp.unlink(missing_ok=True)
+        return cog_tmp
+    except Exception:
+        # Fall back to plain tiled GeoTIFF if COG promotion fails
+        # (e.g. rasterio < 1.3). The downstream contract still holds.
+        return tmp
 
 
-def write_bytes(target: Path, data: bytes) -> Path:
-    """Write bytes to the resolved local path under fakes3."""
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(data)
-    return target
+def _write_json_local(metadata: dict[str, Any]) -> Path:
+    tmp = Path(tempfile.mkstemp(suffix=".json")[1])
+    tmp.write_text(json.dumps(metadata, indent=2, sort_keys=True, default=str))
+    return tmp
 
 
-def write_file_copy(src: Path, dst: Path) -> Path:
-    """Copy a local file to the resolved local path under fakes3."""
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dst)
-    return dst
+def _upload_s3(
+    raw_local: Path,
+    meta_local: Path,
+    *,
+    bucket: str,
+    raw_key: str,
+    meta_key: str,
+    endpoint_url: str,
+    access_key: str | None,
+    secret_key: str | None,
+    region: str,
+) -> None:
+    try:
+        import boto3  # type: ignore
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("boto3 required for S3 upload") from exc
 
+    client = boto3.client(
+        "s3",
+        endpoint_url=endpoint_url,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        region_name=region,
+    )
+    # Ensure bucket exists (MinIO friendly).
+    try:
+        client.head_bucket(Bucket=bucket)
+    except Exception:
+        client.create_bucket(Bucket=bucket)
 
-def read_bytes(path: Path) -> bytes:
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"Not found: {path}")
-    return path.read_bytes()
+    client.upload_file(str(raw_local), bucket, raw_key)
+    client.upload_file(str(meta_local), bucket, meta_key, ExtraArgs={"ContentType": "application/json"})

@@ -1,99 +1,127 @@
-"""FastAPI service for ingestion.
+"""FastAPI app entrypoint for ingestion-svc.
 
-Endpoints:
-    POST /ingest           -> submit an ingest job
-    GET  /ingest/{job_id}  -> poll job status / fetch IngestResult
-    GET  /health           -> liveness
+Wires health + v1/ingest routes. Actual ingestion logic lives in
+`ingest.pipeline.run_ingest` and is dispatched asynchronously.
 """
 from __future__ import annotations
 
 import logging
-import os
-import threading
-import uuid
-from pathlib import Path
-from typing import Optional
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
-from pydantic import ValidationError
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Path
+from fastapi.responses import JSONResponse
 
-from app.ingest import ingest_request
-from app.models import IngestRequest, IngestResult, IngestStatus
-from app.storage import fakes3_root
+from . import __version__
+from .config import load_config
+from .ingest import run_ingest
+from .job_table import get_job_store
+from .models import (
+    ErrorResponse,
+    HealthResponse,
+    IngestRequest,
+    IngestResult,
+    JobHandle,
+    JobStatus,
+)
+from .settings import get_settings
 
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("ingestion-svc")
+# Reader registration happens in app.readers.__init__ when that package is
+# imported (see app/readers/__init__.py:_register_default_readers).
 
-app = FastAPI(title="Ingestion Service", version="0.1.0")
-
-_jobs: dict[str, IngestResult] = {}
-_jobs_lock = threading.Lock()
-
-
-def _run_sync(req: IngestRequest, job_id: str) -> IngestResult:
-    return ingest_request(req, job_id=job_id)
-
-
-@app.get("/health")
-def health() -> dict:
-    return {
-        "status": "ok",
-        "service": "ingestion-svc",
-        "fakes3_root": str(fakes3_root()) if fakes3_root() else None,
-    }
+log = logging.getLogger("ingestion")
 
 
-@app.post("/ingest", response_model=IngestResult)
-def submit_ingest(req: IngestRequest) -> IngestResult:
-    """Submit an ingest job.
+async def _dispatch_ingest(req, settings, store) -> None:
+    """Await run_ingest inside the active event loop.
 
-    If env var ``INGESTION_SYNC=1`` (default in tests), runs synchronously
-    and returns the final IngestResult. Otherwise registers a pending
-    handle and runs on a background thread.
+    BackgroundTasks.add_task calls this coroutine after the response is sent;
+    awaiting inside an async helper guarantees asyncio.create_task can find
+    the running loop and schedule the work cleanly.
     """
-    job_id = req.job_id or str(uuid.uuid4())
-    with _jobs_lock:
-        if job_id in _jobs and _jobs[job_id].status not in (
-            IngestStatus.FAILED,
-            IngestStatus.SUCCEEDED,
-        ):
-            raise HTTPException(status_code=409, detail="job_id already in flight")
+    await run_ingest(req, settings, store)
 
-    if os.environ.get("INGESTION_SYNC", "0") == "1":
-        result = _run_sync(req, job_id)
-        with _jobs_lock:
-            _jobs[job_id] = result
-        return result
 
-    # Async path
-    placeholder = IngestResult(job_id=job_id, status=IngestStatus.PENDING)
-    with _jobs_lock:
-        _jobs[job_id] = placeholder
-    t = threading.Thread(
-        target=lambda: _jobs.update({job_id: _run_sync(req, job_id)}),
-        daemon=True,
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    log.info("ingestion-svc starting (version=%s)", __version__)
+    yield
+    log.info("ingestion-svc shutting down")
+
+
+app = FastAPI(
+    title="Ingestion Service",
+    version=__version__,
+    description="First-stage ingest for the lunar image-registration pipeline.",
+    lifespan=lifespan,
+)
+
+
+@app.get("/health", response_model=HealthResponse, tags=["meta"])
+async def health() -> HealthResponse:
+    """Liveness probe. Returns 'degraded' if the default config can't load."""
+    try:
+        load_config(None)
+        status = "ok"
+    except Exception as exc:  # pragma: no cover - exercised via test
+        log.warning("health degraded: %s", exc)
+        status = "degraded"
+    return HealthResponse(status=status, version=__version__)
+
+
+@app.post(
+    "/v1/ingest",
+    response_model=JobHandle,
+    status_code=202,
+    tags=["ingest"],
+    responses={400: {"model": ErrorResponse}},
+)
+async def ingest_product(
+    req: IngestRequest, background: BackgroundTasks
+) -> JobHandle:
+    """Submit an ingestion job. Returns immediately with PENDING; the actual
+    work runs in the background and is observable via GET /v1/ingest/{job_id}.
+    """
+    store = get_job_store()
+
+    # Reject duplicate job_id with an explicit error rather than clobbering.
+    existing = await store.get(req.job_id)
+    if existing is not None and existing.status not in (
+        JobStatus.FAILED,
+        JobStatus.COMPLETED,
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"job_id {req.job_id!r} already in use (status={existing.status})",
+        )
+
+    await store.put(
+        IngestResult(job_id=req.job_id, status=JobStatus.PENDING)
     )
-    t.start()
-    return placeholder
+
+    settings = get_settings()
+    background.add_task(_dispatch_ingest, req, settings, store)
+
+    return JobHandle(job_id=req.job_id, status=JobStatus.PENDING)
 
 
-@app.get("/ingest/{job_id}", response_model=IngestResult)
-def get_ingest(job_id: str) -> IngestResult:
-    with _jobs_lock:
-        rec = _jobs.get(job_id)
-    if rec is None:
-        raise HTTPException(status_code=404, detail="unknown job_id")
-    return rec
+@app.get(
+    "/v1/ingest/{job_id}",
+    response_model=IngestResult,
+    tags=["ingest"],
+    responses={404: {"model": ErrorResponse}},
+)
+async def get_ingest_status(job_id: str = Path(..., min_length=1, max_length=128)) -> IngestResult:
+    """Poll for the current state of a previously-submitted ingestion job."""
+    result = await get_job_store().get(job_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"unknown job_id {job_id!r}")
+    return result
 
 
-def main() -> None:
-    """Run the API server with uvicorn."""
-    import uvicorn
-
-    host = os.environ.get("INGESTION_HOST", "0.0.0.0")
-    port = int(os.environ.get("INGESTION_PORT", "8080"))
-    uvicorn.run(app, host=host, port=port, log_level="info")
-
-
-if __name__ == "__main__":
-    main()
+@app.exception_handler(Exception)
+async def _unhandled(request, exc):  # pragma: no cover
+    log.exception("unhandled error")
+    return JSONResponse(
+        status_code=500,
+        content=ErrorResponse(code="INTERNAL", message=str(exc)).model_dump(),
+    )

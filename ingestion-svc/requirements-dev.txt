@@ -1,6 +1,2 @@
--r requirements.txt
-pytest>=8.0
-pytest-cov>=4.1
-httpx>=0.27
-jsonschema>=4.21
-openapi-spec-validator>=0.7
+# Dev-only: OpenAPI client codegen
+openapi-python-client==0.21.1

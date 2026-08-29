@@ -1,78 +1,131 @@
-# ingestion-svc (Member 1)
+# ingestion-svc
 
-Lunar image ingestion microservice. Reads raw image files from disk,
-derives per-product metadata, and writes both to an object store
-(references only, never raw bytes over the network).
+First-stage ingest for the lunar image-registration pipeline (Chandrayaan-2
+OHRC/TMC/IIRS ↔ lunar reference basemap). Decodes a raw product, validates
+structure, parses metadata (configurable field-mapping + 3-tier sun-angle
+fallback), and writes a Cloud-Optimized GeoTIFF + `metadata.json` to object
+storage.
 
-## Endpoints
+Downstream services consume only the **URI references** in the
+`IngestResult` — image bytes never traverse the wire.
 
-| Method | Path                | Purpose                          |
-| ------ | ------------------- | -------------------------------- |
-| GET    | `/health`           | liveness                         |
-| POST   | `/ingest`           | submit an IngestRequest          |
-| GET    | `/ingest/{job_id}`  | poll job status / fetch result   |
-
-## Running locally
+## Quick start
 
 ```bash
-pip install -r requirements.txt -r requirements-dev.txt
-INGESTION_SYNC=1 INGESTION_FAKES3_ROOT=./var/fakes3 \
-    python -m app.main
+# from repo root
+docker compose up --build ingestion-svc minio
+# -> http://localhost:8000/health
+# -> http://localhost:9001  (MinIO console: minioadmin / minioadmin)
 ```
 
-## Contracts (binding for downstream services)
+Submit a job (using a local fixture):
 
-| File                                          | Format         | Notes                                          |
-| --------------------------------------------- | -------------- | ---------------------------------------------- |
-| `contracts/metadata.schema.json`              | JSON Schema 2020-12 | `metadata.json` envelope. Mirror of `app/models.py::ProductMetadata`. |
-| `contracts/ingestion.openapi.yaml`            | OpenAPI 3.1    | Auto-generated from the FastAPI app via `python -m scripts.generate_openapi`. |
-
-The contract tests in `tests/test_contract.py` assert that the JSON
-Schema and OpenAPI document are both valid and that the schema matches
-the Pydantic model. The OpenAPI document is regenerated from the live
-app on every test run, so it cannot drift.
-
-## Outputs
-
-The service writes two artifacts to the configured object store:
-
-1. The raw image bytes, at the constructed `raw_image_ref`.
-2. `metadata.json`, at the constructed `metadata_ref`. This is what
-   Member 2's preprocessing-svc reads.
-
-`metadata.json` contents (see `contracts/metadata.schema.json` for the
-formal schema):
-
-```json
-{
-  "sensor_type": "OHRC|TMC|IIRS|REFERENCE",
-  "gsd": <float m/px>,
-  "sun_azimuth_deg": <float|null>,
-  "sun_elevation_deg": <float|null>,
-  "sun_angle_source_tier": "label|ephemeris|unavailable",
-  "projection": "<wkt or proj>",
-  "footprint_wkt": "<wkt|null>",
-  "band_count": <int>,
-  "bit_depth": <int>,
-  "acquisition_time": "<ISO-8601|null>"
-}
+```bash
+curl -X POST http://localhost:8000/v1/ingest \
+  -H 'content-type: application/json' \
+  -d '{
+    "job_id": "demo-001",
+    "source_file_uri": "file:///path/to/fixture.tif",
+    "sensor_type": "REFERENCE"
+  }'
 ```
 
-## Sun-angle source tiers
+Poll:
 
-| Tier          | Meaning                                                 | Behavior                                                            |
-| ------------- | ------------------------------------------------------- | ------------------------------------------------------------------- |
-| `label`       | Calibrated product label                                | `sun_azimuth_deg` and `sun_elevation_deg` are required              |
-| `ephemeris`   | Computed from SPICE / on-board ephemeris                | `sun_azimuth_deg` and `sun_elevation_deg` are required              |
-| `unavailable` | No calibrated angles available                          | Both angles are written as `null`; the tier triggers downstream image-based estimation |
+```bash
+curl http://localhost:8000/v1/ingest/demo-001
+```
 
-The validator in `IngestRequest` rejects requests where the tier is
-`label` or `ephemeris` but the angles are missing — this is the
-"angles consistent with tier" check.
+## Local development (no Docker)
+
+```bash
+cd ingestion-svc
+pip install -r requirements.txt
+INGESTION_FORCE_LOCAL=1 uvicorn app.main:app --reload
+# Output URIs land in ./local_s3/{bucket}/{job_id}/ingestion/
+```
 
 ## Tests
 
 ```bash
-pytest                                    # run all tests
-pytest --cov=app --cov-report=term-missing   # with coverage
+pip install -r requirements.txt
+pytest
 ```
+
+Coverage target: ≥90% on `app/`.
+
+## Configuration
+
+### Default config
+
+`app/config/default.yaml` ships with safe defaults. The `field_mapping` block
+holds the ONLY label-tag names the service knows about.
+
+### Per-job override
+
+Pass `config_ref` in the `IngestRequest`:
+
+```json
+{
+  "job_id": "demo-002",
+  "source_file_uri": "s3://raw/ohrc/foo.LBL",
+  "sensor_type": "OHRC",
+  "config_ref": "s3://configs/ch2/ohrc-strict.yaml"
+}
+```
+
+Accepted `config_ref` schemes:
+- `file:///abs/path.yaml`
+- `s3://bucket/key.yaml`
+- `<basename>.yaml` (resolved against `app/config/`)
+
+If the config can't be loaded, ingestion falls back to the default config and
+logs a warning — a transient config-bucket outage won't fail the pipeline.
+
+## Adding a new sensor_type
+
+1. Implement a reader in `app/readers/` (any format). The reader must
+   satisfy the `ProductReader` protocol (see `app/readers/__init__.py`).
+2. Decorate the class with `@register("NEWSENSOR")` to wire it into the
+   selector.
+3. If the new sensor needs different label-tag names, create a
+   `<name>.yaml` under `app/config/` with the appropriate `field_mapping`
+   and pass it via `config_ref`.
+4. Add a unit test under `tests/` covering:
+   - valid file → COMPLETED
+   - corrupted file → FAILED with specific message
+   - missing metadata field → correct sun-angle tier triggered
+
+No core code (readers selector, parser, pipeline) needs to change.
+
+## Sun-angle fallback tiers
+
+| Tier | Source | Code path |
+|------|--------|-----------|
+| 1    | Product label (mapped via `field_mapping`) | `metadata_parser._resolve_sun_angle` reads `SUN_AZIMUTH` / `SUN_ELEVATION` |
+| 2    | Ephemeris (spiceypy) — needs kernels in `INGESTION_SPICE_KERNELS_DIR` and acquisition_time + lat/lon in label | `_compute_sun_via_spice` |
+| 3    | `unavailable` — downstream (Preprocessing) must estimate from image | Both above return None |
+
+We never hand-roll orbital mechanics — tier 2 is delegated to `spiceypy`.
+
+## Object storage layout
+
+```
+s3://{bucket}/{job_id}/ingestion/
+├── raw.cog          # Cloud-Optimized GeoTIFF
+└── metadata.json    # MetadataSidecar (see contracts/metadata.schema.json)
+```
+
+## API contract
+
+See `../contracts/ingestion.openapi.yaml` (REST/OpenAPI). Any breaking change
+must be reviewed by the Preprocessing service owner — it is the only
+downstream consumer of `IngestResult`.
+
+## Definition of Done
+
+- [x] `docker compose up ingestion-svc minio` boots a healthy service
+- [x] Ingest → status round-trip works for at least one fixture per sensor_type, including REFERENCE
+- [x] All 3 sun-angle tiers unit-tested
+- [x] README complete; API contract committed and versioned in `../contracts/`
+- [x] No hard-coded label field names anywhere in `app/` — all via config
