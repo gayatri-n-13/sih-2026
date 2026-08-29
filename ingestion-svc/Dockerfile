@@ -7,7 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libgdal32 libgeos-dev libproj-dev curl \
+        gdal-bin libgdal-dev libgeos-dev libproj-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv/ingestion
