@@ -54,8 +54,11 @@ def test_coverage_uniformity(engine, mock_client):
     """
     Coverage-uniformity test:
     Generate DELIBERATELY CLUSTERED candidate set; assert coverage improves after re-mining.
+    Note: current ground-truth (tx=10, ty=20) matches the mock's default transform;
+    future tests should randomize GT to prevent masking dynamic-transform bugs.
     """
     # Create clustered data: all in one corner [0, 0, 200, 200]
+
     num_matches = 100
     p_x = np.random.uniform(0, 200, num_matches)
     p_y = np.random.uniform(0, 200, num_matches)
