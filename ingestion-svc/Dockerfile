@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.6
-FROM python:3.11-slim AS base
+FROM python:3.12-slim AS base
 
 # GDAL/rasterio needs libgdal + its headers at runtime.
 ENV DEBIAN_FRONTEND=noninteractive \
